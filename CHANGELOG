@@ -2,9 +2,11 @@ dev
 ---
 
   - Support RESID in ProForma, adding :py:class:`~.ResidResolver` and
-    :py:class:`~.ResidModification`. Both the ``RESID`` and ``R`` prefixes resolve,
-    completing the ProForma 2.0 controlled-vocabulary list. Requires psims with
-    ``load_resid``.
+    :py:class:`~.ResidModification` (`#214 <https://github.com/levitsky/pyteomics/pull/214>`_
+    by Anthony Cesnik). Both the ``RESID`` and ``R`` prefixes resolve, completing the
+    ProForma 2.0 controlled-vocabulary list. Resolution requires a psims providing
+    ``load_resid`` (`psims#26 <https://github.com/mobiusklein/psims/pull/26>`_);
+    without it the tag still parses and the RESID tests skip.
 
 5.0.1
 -----
