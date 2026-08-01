@@ -1,3 +1,11 @@
+dev
+---
+
+  - Support RESID in ProForma, adding :py:class:`~.ResidResolver` and
+    :py:class:`~.ResidModification`. Both the ``RESID`` and ``R`` prefixes resolve,
+    completing the ProForma 2.0 controlled-vocabulary list. Requires psims with
+    ``load_resid``.
+
 5.0.1
 -----
 
