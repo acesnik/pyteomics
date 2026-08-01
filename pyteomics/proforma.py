@@ -102,6 +102,169 @@ class Chimeric(Generic[T], Sequence[T]):
         return value in self.peptides
 
 
+def _cross_link_declarations(chain) -> Dict[str, List[float]]:
+    """Masses declared for each cross-link group within one chain."""
+    declarations: Dict[str, List[float]] = {}
+    for _position, tags in getattr(chain, 'sequence', ()) or ():
+        for tag in tags or ():
+            group = getattr(tag, 'group_id', None)
+            if not (group and str(group).startswith('#XL')):
+                continue
+            if not (tag.is_modification() and tag.has_mass()):
+                continue
+            try:
+                mass = tag.mass
+            except Exception:
+                continue
+            declarations.setdefault(str(group), []).append(mass)
+    return declarations
+
+
+def _cross_link_overcount_within(chain) -> Tuple[float, List[str]]:
+    """Linker mass a single chain counts more than once.
+
+    Section 9.2.1 requires a self-link be written once, the other site carrying
+    a bare ``[#XL1]``. Repeating it inside one chain is redundant rather than
+    useful, so it is both discounted and reported.
+    """
+    excess = 0.0
+    duplicated = []
+    for group, masses in _cross_link_declarations(chain).items():
+        if len(masses) > 1:
+            duplicated.append(group)
+            excess += sum(masses[1:])
+    return excess, sorted(duplicated)
+
+
+def _cross_link_overcount(chains) -> Tuple[float, List[str]]:
+    """Cross-linker mass counted more than once, and the groups responsible.
+
+    Repeating a declaration across chains is useful rather than redundant: it
+    lets each chain be read on its own, without hunting through the others for
+    what ``#XL1`` refers to, and section 9.2.2 writes its examples both ways.
+    The two spellings denote one molecule and must agree, so every chain after
+    the first to declare a group is discounted.
+    """
+    seen: Dict[str, float] = {}
+    excess = 0.0
+    duplicated = []
+    for chain in chains:
+        # Each chain has already discounted its own repeats, so only the first
+        # declaration per chain is in play here.
+        for group, masses in _cross_link_declarations(chain).items():
+            if group in seen:
+                duplicated.append(group)
+                excess += masses[0]
+            else:
+                seen[group] = masses[0]
+    return excess, sorted(set(duplicated))
+
+
+class PeptidoformIon(Generic[T], Sequence[T]):
+    '''
+    A container for a peptidoform ion: one or more chains joined by ``//``.
+
+    The middle tier of ProForma's three-level hierarchy. A peptidoform ion set
+    (:class:`Chimeric`, separated by ``+``) contains peptidoform ions, which
+    contain peptidoforms. Chains joined by ``//`` are one covalently bonded
+    molecule, held together by cross-links whose groups span them, so the ion
+    rather than any single chain is what carries a charge and a total mass.
+
+    Supports the :class:`Sequence` protocol over the generic type and
+    pattern matching on attributes.
+
+    Attributes
+    ----------
+    chains : :class:`list` of ``T``
+        The parsed chains, in the order written
+    name : :class:`str`, optional
+        The ion-level name, written ``(>>name)``
+    '''
+    chains: List[T]
+    name: Optional[str]
+    set_name: Optional[str]
+
+    __slots__ = ('chains', 'name', 'set_name')
+
+    __match_args__ = ("chains", "name")
+
+    def __init__(self, chains: List[T], name: Optional[str]=None,
+                 set_name: Optional[str]=None):
+        self.chains = chains
+        self.name = name
+        self.set_name = set_name
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "{self.__class__.__name__}({self.chains}, name={self.name!r})".format(self=self)
+
+    @overload
+    def __getitem__(self, i: int) -> T:  # pragma: no cover
+        ...
+
+    @overload
+    def __getitem__(self, i: slice) -> List[T]:  # pragma: no cover
+        ...
+
+    def __getitem__(self, i: Union[int, slice]) -> Union[T, List[T]]:
+        return self.chains[i]
+
+    def __iter__(self):
+        yield from self.chains
+
+    def __len__(self):
+        return len(self.chains)
+
+    def __bool__(self):
+        return bool(self.chains)
+
+    def __contains__(self, value):
+        return value in self.chains
+
+    def __eq__(self, other):
+        if isinstance(other, PeptidoformIon):
+            return self.chains == other.chains
+        if isinstance(other, str):
+            return str(self) == other
+        return NotImplemented
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __str__(self):
+        # The specification requires that where several levels of name tag are
+        # given they appear highest first, so the set name precedes the ion's.
+        prefix = "(>>>%s)" % self.set_name if self.set_name else ""
+        if self.name:
+            prefix += "(>>%s)" % self.name
+        return prefix + "//".join(str(chain) for chain in self.chains)
+
+    @property
+    def charge_state(self):
+        '''The charge of the ion as a whole.
+
+        Per the specification the charge follows the final chain, so it is
+        read from whichever chain declares one.
+        '''
+        for chain in self.chains:
+            charge = getattr(chain, 'charge_state', None)
+            if charge is not None:
+                return charge
+        return None
+
+    @property
+    def mass(self) -> float:
+        '''The total neutral mass of the ion.
+
+        Each cross-link contributes its linker exactly once, whether the string
+        declares it once and refers to it elsewhere with a bare ``[#XL1]``, or
+        repeats the declaration on every chain it touches. Both spellings
+        appear in section 9.2.2 of the specification and denote one molecule.
+        '''
+        total = sum(chain.mass for chain in self.chains)
+        excess, _duplicated = _cross_link_overcount(self.chains)
+        return total - excess
+
+
 class ProFormaError(PyteomicsError):
     def __init__(self, message, index=None, parser_state=None, **kwargs):
         super(ProFormaError, self).__init__(PyteomicsError, message, index, parser_state)
@@ -274,6 +437,9 @@ class TagBase(object):
             TagTypeEnum.massmod,
             TagTypeEnum.psimod,
             TagTypeEnum.custom,
+            # XL-MOD was omitted when cross-linking support was added, so
+            # `find_modification` could not see a cross-linker.
+            TagTypeEnum.xlmod,
         )
 
     def find_modification(self) -> Optional["TagBase"]:
@@ -2697,7 +2863,12 @@ class Parser:
         self.state = ParserStateEnum.before_sequence
         self._VALID_AA = VALID_AA if not case_sensitive_aa else VALID_AA_UPPER
         self.chimeric = chimeric
+        # `components` holds peptidoform ions, each a list of chains. Most
+        # strings yield one ion of one chain; `//` is what adds chains, and it
+        # is unambiguous wherever it can be reached, so it needs no opting in.
+        self.saw_chain_separator = False
         self.components = []
+        self.chains = []
 
         self.fixed_modifications = []
         self.isotopes = []
@@ -2742,6 +2913,10 @@ class Parser:
         self.names = {}
         if 3 in names:
             self.names[3] = names[3]
+        # The ion-level name belongs to the whole ion, so it survives a `//`
+        # boundary. `_handle_chimeric_separator` clears it when the ion ends.
+        if 2 in names and self._in_ion:
+            self.names[2] = names[2]
 
     def _chimeric_disabled_error(self):
         raise ProFormaError(
@@ -2754,10 +2929,28 @@ class Parser:
             self.state,
         )
 
+    @property
+    def _in_ion(self) -> bool:
+        """Whether a ``//`` has already been seen in the ion being parsed."""
+        return bool(self.chains)
+
+    def _close_ion(self):
+        """End the peptidoform ion under construction."""
+        self.chains.append(self._finish_component())
+        self.components.append(self.chains)
+        self.chains = []
+
+    def _handle_chain_separator(self):
+        self.saw_chain_separator = True
+        self.chains.append(self._finish_component())
+        self._reset_component()
+
     def _handle_chimeric_separator(self):
         if not self.chimeric:
             self._chimeric_disabled_error()
-        self.components.append(self._finish_component())
+        self._close_ion()
+        # The ion-level name does not carry across a chimeric boundary.
+        self.names.pop(2, None)
         self._reset_component()
 
     def handle_before(self, c: str):
@@ -3066,12 +3259,11 @@ class Parser:
             self.charge_buffer.append(c)
             self.state = CHARGE_NUMBER
         elif c == "/":
+            # A second `/` means the charge that appeared to be starting is
+            # really a chain separator; the charge, if any, follows the last
+            # chain and belongs to the ion.
             self.state = ParserStateEnum.inter_chain_cross_link_start
-            raise ProFormaError(
-                "Inter-chain cross-linked peptides are not yet supported",
-                self.index,
-                self.state,
-            )
+            self._handle_chain_separator()
         elif c == '[':
             self.state = ParserStateEnum.charge_state_adduct_start
             self.depth = 1
@@ -3265,7 +3457,7 @@ class Parser:
         }
 
     def _apply_shared_properties(self):
-        for _positions, props in self.components:
+        for _positions, props in (chain for ion in self.components for chain in ion):
             props["fixed_modifications"] = list(self.fixed_modifications)
             props["isotopes"] = list(self.isotopes)
             props["group_ids"] = sorted(set(props["group_ids"]) | self.shared_group_ids)
@@ -3285,12 +3477,38 @@ class Parser:
             All other information outside the main sequence, including unlocalized, labile, or global modifications,
             names, charge states, and more.
         """
-        component = self._finish_component()
+        self._close_ion()
+        self._apply_shared_properties()
+        ions = self.components
+        if self.saw_chain_separator:
+            # `//` was used, so the peptidoform ion tier is meaningful and is
+            # made explicit. Uniform across a chimeric set, so that a set mixing
+            # a two-chain ion with a one-chain one does not mix types.
+            packed = [PeptidoformIon(ion, *self._ion_name(ion)) for ion in ions]
+            if self.chimeric:
+                return Chimeric(packed, len(packed) > 1)
+            return packed[0]
         if self.chimeric:
-            self.components.append(component)
-            self._apply_shared_properties()
-            return Chimeric(self.components, len(self.components) > 1)
-        return component
+            return Chimeric([ion[0] for ion in ions], len(ions) > 1)
+        return ions[0][0]
+
+    @staticmethod
+    def _ion_name(ion: List[ProFormaParseResult]) -> Tuple[Optional[str], Optional[str]]:
+        """Take the ``(>>name)`` and ``(>>>name)`` off an ion's chains.
+
+        The name belongs to the ion, not to any chain -- the data schema in the
+        specification's Appendix II puts it on the peptidoform ion -- and the
+        parser records it on every chain it spans. Leaving it there would make
+        each chain serialise it, emitting it once per chain.
+        """
+        found = {}
+        for _positions, props in ion:
+            names = props.get("names") or {}
+            for level in (2, 3):
+                value = names.pop(level, None)
+                if value and level not in found:
+                    found[level] = value
+        return found.get(2), found.get(3)
 
     def _local_charges(self) -> Tuple[int, int]:
         return _local_charges(
@@ -3339,7 +3557,8 @@ def parse(
 
 def parse(
     sequence: str, *, chimeric: bool = False, **kwargs
-) -> Union[ProFormaParseResult, Chimeric[ProFormaParseResult]]:
+) -> Union[ProFormaParseResult, PeptidoformIon[ProFormaParseResult],
+           Chimeric[ProFormaParseResult], Chimeric[PeptidoformIon[ProFormaParseResult]]]:
     """
     Tokenize a ProForma sequence into a sequence of amino acid+tag positions, and a
     mapping of sequence-spanning modifiers.
@@ -3358,6 +3577,14 @@ def parse(
         top-level ``+`` raises a :class:`ProFormaError` suggesting this option.
     **kwargs :
         Forwarded to :class:`Parser`
+
+    Notes
+    -----
+    A string that joins chains with ``//`` yields a :class:`PeptidoformIon`
+    rather than a single parse result. No option selects this: ``//`` is only
+    reachable once a peptidoform is complete, so it is never ambiguous with a
+    slash inside a tag, a name or a charge, and a string that contains one
+    simply means something a single peptidoform cannot represent.
 
     Returns
     -------
@@ -4077,13 +4304,20 @@ class ProForma(object):
             Forwarded to :class:`Parser`
         Returns
         -------
-        ProForma or Chimeric[ProForma]
+        ProForma, PeptidoformIon[ProForma], Chimeric[ProForma] or
+        Chimeric[PeptidoformIon[ProForma]]
         """
         result = parse(string, chimeric=chimeric, **kwargs)
-        if chimeric:
 
-            return Chimeric([cls(*component) for component in result], result.chimeric)
-        return cls(*result)
+        def build(value):
+            if isinstance(value, PeptidoformIon):
+                return PeptidoformIon([cls(*chain) for chain in value], value.name,
+                                      value.set_name)
+            return cls(*value)
+
+        if chimeric:
+            return Chimeric([build(component) for component in result], result.chimeric)
+        return build(result)
 
     @property
     def mass(self) -> float:
@@ -4135,6 +4369,20 @@ class ProForma(object):
             for tag in iv.tags or ():
                 if tag.has_mass():
                     mass += tag.mass
+        # A cross-link is one molecule however many sites it bridges. Section
+        # 9.2.1 requires a self-link be written once, the other site carrying a
+        # bare [#XL1]; where a string repeats the declaration instead, the
+        # linker would otherwise be counted once per declaration.
+        if any(str(group).startswith("#XL") for group in self.properties.get("group_ids") or ()):
+            excess, duplicated = _cross_link_overcount_within(self)
+            if duplicated:
+                warnings.warn(
+                    "Cross-link group(s) %s are declared more than once within a single "
+                    "peptide. The specification asks that a self-link be written once, "
+                    "with the other site a bare reference such as [#XL1]. Each linker has "
+                    "been counted once regardless." % ", ".join(duplicated)
+                )
+            mass -= excess
         return mass
 
     def mz(self, charge: Union[int, ChargeState, None] = None, **kwargs) -> float:

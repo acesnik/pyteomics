@@ -139,7 +139,17 @@ These features are independent from each other:
 
 4. Cross-Linking Extensions
 
-    - [ ]  Cross-linked peptides (using the XL-MOD CV/ontology, the prefix X MUST be used for XL-MOD CV/ontology term names).
+    - [x]  Cross-linked peptides (using the XL-MOD CV/ontology, the prefix X MUST be used for XL-MOD CV/ontology term names).
+
+      Broken out along the specification's own subdivision of section 9, since
+      the vocabulary and the multi-chain notation are separate requirements:
+
+      - [x]  The XL-MOD CV/ontology (section 9.1).
+      - [x]  Cross-links within a single peptide, including dead ends (section 9.2.1).
+      - [x]  Inter-chain cross-links, written with ``//`` (section 9.2.2). Such
+             a string parses to a :class:`PeptidoformIon` rather than a single
+             :class:`ProForma`; no option selects this.
+      - [x]  Disulfide linkages (section 9.2.3).
 
 5. Glycan Extensions
 
@@ -177,6 +187,8 @@ High Level Interface
 
 Tag Types
 ---------
+
+.. autoclass:: PeptidoformIon
 
 .. autoclass:: TagBase
 
