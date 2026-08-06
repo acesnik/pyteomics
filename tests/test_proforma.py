@@ -840,15 +840,56 @@ class InterChainCrossLinkTest(unittest.TestCase):
         self.assertEqual(pf.chains, [pf])
 
     def test_operations_with_no_multichain_meaning_refuse(self):
+        # Only these two. Fragmenting a covalently joined pair yields
+        # cross-linked fragment pairs, and enumerating localisations across
+        # chains is a product over chains; neither is representable here.
         ion = ProForma.parse("PEPK[XLMOD:02001#XL1]//TIDEK[#XL1]")
         for call in (lambda: ion.fragments("b", 1),
-                     lambda: ion.composition(),
-                     lambda: ion.mz(charge=2),
                      lambda: list(ion.proteoforms())):
             with self.subTest(call=call):
                 with self.assertRaises(ValueError) as caught:
                     call()
                 self.assertIn(".chains", str(caught.exception))
+
+    def test_composition_and_mz_span_the_chains(self):
+        # Whatever `mass` can answer for the whole molecule, `composition` and
+        # `mz` can answer too -- they are the same arithmetic.
+        ion = ProForma.parse("SEK[XLMOD:02001#XL1]UENCE//EMEVTK[#XL1]SESPEK")
+        self.assertAlmostEqual(ion.composition().mass(), ion.mass, 6)
+        self.assertAlmostEqual(ion.mz(charge=2), (ion.mass + 2 * 1.00727646677) / 2, 4)
+
+    def test_composition_counts_a_linker_once(self):
+        once = ProForma.parse("SEK[XLMOD:02001#XL1]UENCE//EMEVTK[#XL1]SESPEK")
+        both = ProForma.parse(
+            "SEK[XLMOD:02001#XL1]UENCE//EMEVTK[XLMOD:02001#XL1]SESPEK")
+        self.assertAlmostEqual(once.composition().mass(), both.composition().mass(), 6)
+
+    def test_copy_keeps_every_chain(self):
+        ion = ProForma.parse("SEK[XLMOD:02001#XL1]UENCE//EMEVTK[#XL1]SESPEK")
+        duplicate = ion.copy()
+        self.assertEqual(len(duplicate.chains), 2)
+        self.assertEqual(str(duplicate), str(ion))
+        self.assertEqual(duplicate, ion)
+
+    def test_a_cross_link_group_is_found_across_chains(self):
+        # The whole point of a group is that its ends are apart, and here they
+        # are on different chains. Without positions the answer is unambiguous,
+        # so it spans; with positions an index means nothing until you know
+        # which chain it indexes, so it refuses.
+        ion = ProForma.parse("SEK[XLMOD:02001#XL1]UENCE//EMEVTK[#XL1]SESPEK")
+        self.assertEqual(len(ion.find_tags_by_id("#XL1", include_position=False)), 2)
+        self.assertEqual(len(ion.tags), 2)
+        with self.assertRaises(ValueError):
+            ion.find_tags_by_id("#XL1")
+        # Unchanged for one chain.
+        single = ProForma.parse("EMEVTK[XLMOD:02001#XL1]SESPEK[#XL1]")
+        self.assertEqual(len(single.find_tags_by_id("#XL1")), 2)
+
+    def test_a_two_chain_ion_is_not_its_first_chain(self):
+        # Equality has to see the other chains, or two different molecules
+        # compare equal.
+        ion = ProForma.parse("SEK[XLMOD:02001#XL1]UENCE//EMEVTK[#XL1]SESPEK")
+        self.assertNotEqual(ion, ProForma.parse("SEK[XLMOD:02001#XL1]UENCE"))
 
     def test_a_slash_inside_a_tag_or_name_is_not_a_separator(self):
         for seq in ("PEP[INFO:http://example.com/a]TIDE",
