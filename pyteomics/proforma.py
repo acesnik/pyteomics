@@ -2735,12 +2735,17 @@ def _local_charges(
 #: ``(amino acid, tags)`` pairs; ``properties`` is everything that is not
 #: positional -- terminal, labile and unlocalized modifications, intervals,
 #: isotopes, group ids, charge state and names. A peptidoform written with
-#: ``//`` has one of these per chain; see :class:`PeptidoformIon`.
-ProFormaParseResult = Tuple[List[Tuple[str, Optional[List[TagBase]]]], Dict[str, Any]]
+#: ``//`` has one of these per chain; see :class:`ProFormaParseResult`, which is
+#: what :func:`parse` returns and which holds them.
+ProFormaChain = Tuple[List[Tuple[str, Optional[List[TagBase]]]], Dict[str, Any]]
 
 
-class PeptidoformIon(Sequence):
-    """One peptidoform ion: the chains of a molecule, as :func:`parse` returns them.
+class ProFormaParseResult(Sequence):
+    """What :func:`parse` returns: the chains of one peptidoform ion.
+
+    This is parser plumbing, not the representation of a cross-linked peptide.
+    That is :class:`ProForma`, which gained a :attr:`~ProForma.chains`
+    collection; there is no separate type for a molecule spanning chains.
 
     Almost every ProForma string describes a single chain, and for that case
     this behaves exactly as the ``(positions, properties)`` pair it used to be
@@ -2754,7 +2759,7 @@ class PeptidoformIon(Sequence):
 
     __slots__ = ("chains",)
 
-    def __init__(self, chains: List[ProFormaParseResult]):
+    def __init__(self, chains: List[ProFormaChain]):
         self.chains = list(chains)
 
     def __len__(self):
@@ -2767,7 +2772,7 @@ class PeptidoformIon(Sequence):
         return iter(self.chains[0])
 
     def __eq__(self, other):
-        if isinstance(other, PeptidoformIon):
+        if isinstance(other, ProFormaParseResult):
             return self.chains == other.chains
         return tuple(self.chains[0]) == tuple(other)
 
@@ -3383,7 +3388,7 @@ class Parser:
             self.index += 1
         return self.index < self.length
 
-    def _finish_chain(self) -> ProFormaParseResult:
+    def _finish_chain(self) -> ProFormaChain:
         if self.charge_buffer:
             charge_number = self.charge_buffer()
             if self.adduct_buffer:
@@ -3441,7 +3446,7 @@ class Parser:
 
     def finish(
         self,
-    ) -> Union[PeptidoformIon, Chimeric[PeptidoformIon]]:
+    ) -> Union[ProFormaParseResult, Chimeric[ProFormaParseResult]]:
         """
         Post-process the parser's accumulated parsed token data and return the parsed
         sequence and metadata.
@@ -3459,13 +3464,13 @@ class Parser:
         for ion in self.components:
             if len(ion) > 1:
                 self._dedupe_ion_names(ion)
-        packed = [PeptidoformIon(ion) for ion in self.components]
+        packed = [ProFormaParseResult(ion) for ion in self.components]
         if self.chimeric:
             return Chimeric(packed, len(packed) > 1)
         return packed[0]
 
     @staticmethod
-    def _dedupe_ion_names(ion: List[ProFormaParseResult]) -> None:
+    def _dedupe_ion_names(ion: List[ProFormaChain]) -> None:
         """Keep the ion and set names on the first chain only.
 
         The ``(>>name)`` and ``(>>>name)`` describe tiers above a chain -- the
@@ -3515,20 +3520,20 @@ class Parser:
 
 
 @overload
-def parse(sequence: str, *, chimeric: Literal[False] = False, **kwargs) -> PeptidoformIon:  # pragma: no cover
+def parse(sequence: str, *, chimeric: Literal[False] = False, **kwargs) -> ProFormaParseResult:  # pragma: no cover
     ...
 
 
 @overload
 def parse(
     sequence: str, *, chimeric: Literal[True], **kwargs
-) -> Chimeric[PeptidoformIon]:  # pragma: no cover
+) -> Chimeric[ProFormaParseResult]:  # pragma: no cover
     ...
 
 
 def parse(
     sequence: str, *, chimeric: bool = False, **kwargs
-) -> Union[PeptidoformIon, Chimeric[PeptidoformIon]]:
+) -> Union[ProFormaParseResult, Chimeric[ProFormaParseResult]]:
     """
     Tokenize a ProForma sequence into a sequence of amino acid+tag positions, and a
     mapping of sequence-spanning modifiers.
@@ -3551,7 +3556,7 @@ def parse(
     Notes
     -----
 A string that joins chains with ``//`` puts the further chains in
-    :attr:`PeptidoformIon.chains`; the return type does not change. No
+    :attr:`ProFormaParseResult.chains`; the return type does not change. No
     option selects this: ``//`` is only reachable once a peptidoform is
     complete, so it is never ambiguous with a slash inside a tag, a name or a
     charge state.
@@ -3566,7 +3571,7 @@ A string that joins chains with ``//`` puts the further chains in
     """
     # short-circuiting the parser for simple sequences with no tags or modifications to avoid overhead
     if sequence.isupper() and sequence.isalpha():
-        result = PeptidoformIon([(
+        result = ProFormaParseResult([(
             [(aa, None) for aa in sequence],
             Parser.empty_properties()
         )])
@@ -4335,7 +4340,7 @@ class ProForma(object):
         """
         result = parse(string, chimeric=chimeric, **kwargs)
 
-        def build(ion: PeptidoformIon) -> "ProForma":
+        def build(ion: ProFormaParseResult) -> "ProForma":
             first, *rest = ion.chains
             return cls(*first, additional_chains=[cls(*chain) for chain in rest])
 
