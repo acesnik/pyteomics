@@ -136,6 +136,43 @@ def _cross_link_overcount_within(chain) -> Tuple[float, List[str]]:
     return excess, sorted(duplicated)
 
 
+def _cross_link_declared_compositions(chain) -> Dict[str, List[Any]]:
+    """Compositions declared for each cross-link group within one chain."""
+    declarations: Dict[str, List[Any]] = {}
+    for _position, tags in getattr(chain, 'sequence', ()) or ():
+        for tag in tags or ():
+            group = getattr(tag, 'group_id', None)
+            if not (group and str(group).startswith('#XL')):
+                continue
+            if not (tag.is_modification() and tag.has_composition()):
+                continue
+            try:
+                composition = tag.composition
+            except Exception:
+                continue
+            if composition is not None:
+                declarations.setdefault(str(group), []).append(composition)
+    return declarations
+
+
+def _cross_link_composition_overcount(chains):
+    """The composition counterpart of :func:`_cross_link_overcount`.
+
+    A linker declared on several chains is one molecule, so its atoms are
+    counted once, exactly as its mass is.
+    """
+    seen = set()
+    excess = Composition()
+    for chain in chains:
+        within = _cross_link_declared_compositions(chain)
+        for group, compositions in within.items():
+            start = 0 if group in seen else 1
+            seen.add(group)
+            for composition in compositions[start:]:
+                excess += composition
+    return excess
+
+
 def _cross_link_overcount(chains) -> Tuple[float, List[str]]:
     """Cross-linker mass counted more than once, and the groups responsible.
 
@@ -2698,12 +2735,17 @@ def _local_charges(
 #: ``(amino acid, tags)`` pairs; ``properties`` is everything that is not
 #: positional -- terminal, labile and unlocalized modifications, intervals,
 #: isotopes, group ids, charge state and names. A peptidoform written with
-#: ``//`` has one of these per chain; see :class:`PeptidoformIon`.
-ProFormaParseResult = Tuple[List[Tuple[str, Optional[List[TagBase]]]], Dict[str, Any]]
+#: ``//`` has one of these per chain; see :class:`ProFormaParseResult`, which is
+#: what :func:`parse` returns and which holds them.
+ProFormaChain = Tuple[List[Tuple[str, Optional[List[TagBase]]]], Dict[str, Any]]
 
 
-class PeptidoformIon(Sequence):
-    """One peptidoform ion: the chains of a molecule, as :func:`parse` returns them.
+class ProFormaParseResult(Sequence):
+    """What :func:`parse` returns: the chains of one peptidoform ion.
+
+    This is parser plumbing, not the representation of a cross-linked peptide.
+    That is :class:`ProForma`, which gained a :attr:`~ProForma.chains`
+    collection; there is no separate type for a molecule spanning chains.
 
     Almost every ProForma string describes a single chain, and for that case
     this behaves exactly as the ``(positions, properties)`` pair it used to be
@@ -2717,7 +2759,7 @@ class PeptidoformIon(Sequence):
 
     __slots__ = ("chains",)
 
-    def __init__(self, chains: List[ProFormaParseResult]):
+    def __init__(self, chains: List[ProFormaChain]):
         self.chains = list(chains)
 
     def __len__(self):
@@ -2730,7 +2772,7 @@ class PeptidoformIon(Sequence):
         return iter(self.chains[0])
 
     def __eq__(self, other):
-        if isinstance(other, PeptidoformIon):
+        if isinstance(other, ProFormaParseResult):
             return self.chains == other.chains
         return tuple(self.chains[0]) == tuple(other)
 
@@ -2876,13 +2918,13 @@ class Parser:
 
     def _close_ion(self):
         """End the peptidoform ion under construction."""
-        self.chains.append(self._finish_component())
+        self.chains.append(self._finish_chain())
         self.components.append(self.chains)
         self.chains = []
 
     def _handle_chain_separator(self):
         self.saw_chain_separator = True
-        self.chains.append(self._finish_component())
+        self.chains.append(self._finish_chain())
         self._reset_component()
 
     def _handle_chimeric_separator(self):
@@ -3346,7 +3388,7 @@ class Parser:
             self.index += 1
         return self.index < self.length
 
-    def _finish_component(self) -> PeptidoformIon:
+    def _finish_chain(self) -> ProFormaChain:
         if self.charge_buffer:
             charge_number = self.charge_buffer()
             if self.adduct_buffer:
@@ -3404,7 +3446,7 @@ class Parser:
 
     def finish(
         self,
-    ) -> Union[PeptidoformIon, Chimeric[PeptidoformIon]]:
+    ) -> Union[ProFormaParseResult, Chimeric[ProFormaParseResult]]:
         """
         Post-process the parser's accumulated parsed token data and return the parsed
         sequence and metadata.
@@ -3422,13 +3464,13 @@ class Parser:
         for ion in self.components:
             if len(ion) > 1:
                 self._dedupe_ion_names(ion)
-        packed = [PeptidoformIon(ion) for ion in self.components]
+        packed = [ProFormaParseResult(ion) for ion in self.components]
         if self.chimeric:
             return Chimeric(packed, len(packed) > 1)
         return packed[0]
 
     @staticmethod
-    def _dedupe_ion_names(ion: List[ProFormaParseResult]) -> None:
+    def _dedupe_ion_names(ion: List[ProFormaChain]) -> None:
         """Keep the ion and set names on the first chain only.
 
         The ``(>>name)`` and ``(>>>name)`` describe tiers above a chain -- the
@@ -3478,20 +3520,20 @@ class Parser:
 
 
 @overload
-def parse(sequence: str, *, chimeric: Literal[False] = False, **kwargs) -> PeptidoformIon:  # pragma: no cover
+def parse(sequence: str, *, chimeric: Literal[False] = False, **kwargs) -> ProFormaParseResult:  # pragma: no cover
     ...
 
 
 @overload
 def parse(
     sequence: str, *, chimeric: Literal[True], **kwargs
-) -> Chimeric[PeptidoformIon]:  # pragma: no cover
+) -> Chimeric[ProFormaParseResult]:  # pragma: no cover
     ...
 
 
 def parse(
     sequence: str, *, chimeric: bool = False, **kwargs
-) -> Union[PeptidoformIon, Chimeric[PeptidoformIon]]:
+) -> Union[ProFormaParseResult, Chimeric[ProFormaParseResult]]:
     """
     Tokenize a ProForma sequence into a sequence of amino acid+tag positions, and a
     mapping of sequence-spanning modifiers.
@@ -3514,7 +3556,7 @@ def parse(
     Notes
     -----
 A string that joins chains with ``//`` puts the further chains in
-    :attr:`PeptidoformIon.chains`; the return type does not change. No
+    :attr:`ProFormaParseResult.chains`; the return type does not change. No
     option selects this: ``//`` is only reachable once a peptidoform is
     complete, so it is never ambiguous with a slash inside a tag, a name or a
     charge state.
@@ -3529,7 +3571,7 @@ A string that joins chains with ``//`` puts the further chains in
     """
     # short-circuiting the parser for simple sequences with no tags or modifications to avoid overhead
     if sequence.isupper() and sequence.isalpha():
-        result = PeptidoformIon([(
+        result = ProFormaParseResult([(
             [(aa, None) for aa in sequence],
             Parser.empty_properties()
         )])
@@ -4183,7 +4225,9 @@ class ProForma(object):
         elif other is None:
             return False
         else:
-            return self.sequence == other.sequence and self.properties == other.properties
+            return (self.sequence == other.sequence
+                    and self.properties == other.properties
+                    and self.additional_chains == getattr(other, 'additional_chains', []))
 
     def __ne__(self, other):
         return not self == other
@@ -4296,7 +4340,7 @@ class ProForma(object):
         """
         result = parse(string, chimeric=chimeric, **kwargs)
 
-        def build(ion: PeptidoformIon) -> "ProForma":
+        def build(ion: ProFormaParseResult) -> "ProForma":
             first, *rest = ion.chains
             return cls(*first, additional_chains=[cls(*chain) for chain in rest])
 
@@ -4403,7 +4447,6 @@ class ProForma(object):
         -------
         float
         """
-        self._single_chain("mz()")
         charge_state = charge
         if charge_state is None:
             charge_state = self.charge_state
@@ -4473,6 +4516,8 @@ class ProForma(object):
                574.27188356, 703.31447664])
 
         """
+        # Fragmenting a covalently joined pair yields cross-linked fragment
+        # pairs, which this model has no way to express.
         self._single_chain("fragments()")
         if isinstance(ion_shift, str):
             if ion_shift[0] in 'xyz':
@@ -4583,6 +4628,15 @@ class ProForma(object):
         -------
         list[tuple[Any, TagBase]] or list[TagBase]
         '''
+        if self.additional_chains:
+            # Without positions the answer is unambiguous, and it is the one a
+            # cross-link group needs: the two ends of `#XL1` sit on different
+            # chains. With positions it is not -- an index means nothing until
+            # you know which chain it indexes.
+            if include_position:
+                self._single_chain("find_tags_by_id(include_position=True)")
+            return [tag for part in self.chains
+                    for tag in part.find_tags_by_id(tag_id, include_position=False)]
         if not tag_id.startswith("#"):
             tag_id = "#" + tag_id
         matches = []
@@ -4610,6 +4664,9 @@ class ProForma(object):
 
     @property
     def tags(self):
+        """Every tag on the molecule, across all of its chains."""
+        if self.additional_chains:
+            return [tag for part in self.chains for tag in part.tags]
         return [tag for tags_at in [pos[1] for pos in self if pos[1]] for tag in tags_at]
 
     def proteoforms(self, include_unmodified: bool = False, include_labile: bool = False, strip: bool = False, deepcopy: bool = False) -> Iterator["ProForma"]:
@@ -4637,6 +4694,8 @@ class ProForma(object):
         ------
         :class:`ProForma`
         """
+        # Enumerating localisations across chains is a product over chains,
+        # and the result would not be representable as a flat sequence.
         self._single_chain("proteoforms()")
         return iter(ProteoformCombinator(self, include_unmodified=include_unmodified, include_labile=include_labile, strip=strip, deepcopy=deepcopy))
 
@@ -4659,7 +4718,8 @@ class ProForma(object):
         ]:
             properties[k] = [v.copy() for v in properties[k]]
         properties['names'] = properties['names'].copy()
-        return self.__class__(sequence, properties)
+        return self.__class__(sequence, properties,
+                              [chain.copy() for chain in self.additional_chains])
 
     def composition(self, include_charge: Union[bool, ChargeState]=False, aa_comp=None, ignore_missing=False) -> Composition:
         '''
@@ -4689,7 +4749,20 @@ class ProForma(object):
         Composition
             :py:class:`Composition` object representing the composition of the ProForma sequence.
         '''
-        self._single_chain("composition()")
+        if self.additional_chains:
+            # One molecule, so one composition: the chains sum, and a linker
+            # declared on more than one of them is counted once, exactly as it
+            # is for `mass`.
+            total = Composition()
+            for part in self.chains:
+                total += part.composition(include_charge=False, aa_comp=aa_comp,
+                                          ignore_missing=ignore_missing)
+            total -= _cross_link_composition_overcount(self.chains)
+            if include_charge:
+                charge = self.charge_state if include_charge is True else include_charge
+                if charge is not None:
+                    total += charge.composition()
+            return total
         if ignore_missing:
             def get_comp(tag):
                 try:

@@ -183,7 +183,7 @@ Helpers
 High Level Interface
 --------------------
 
-.. autoclass:: PeptidoformIon
+.. autoclass:: ProFormaParseResult
 
 .. autoclass:: ProForma
 
