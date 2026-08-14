@@ -1509,6 +1509,10 @@ class GenericModification(ModificationBase):
         PSIModModification.resolver,
         XLMODModification.resolver,
         GNOmeModification.resolver,
+        # After the vocabularies that share names with RESID, so anything they
+        # already answer keeps its existing answer, and before the non-strict
+        # pass so a RESID name is preferred over a fuzzy Unimod match.
+        ResidModification.resolver,
         # Some really common names aren't actually found in the XML exactly, so default
         # to non-strict matching now to avoid masking other sources here.
         partial(UnimodModification.resolver, strict=False)

@@ -835,6 +835,22 @@ class ResidModificationResolverTest(unittest.TestCase):
             self.assertAlmostEqual(ResidModification(resid_id).mass,
                                    PSIModModification(psimod_id).mass, 4)
 
+    def test_bare_accession_resolves_through_the_generic_chain(self):
+        # `[AA0038]` with no prefix. RESID sits after the vocabularies that
+        # share names with it, so this is additive: nothing that resolved
+        # before changes, and 619 bare accessions that resolved to nothing now
+        # resolve.
+        mod = GenericModification("AA0038").resolve()
+        self.assertEqual(mod["provider"], "resid")
+        self.assertEqual(mod["name"], "O-phospho-L-threonine")
+        self.assertAlmostEqual(GenericModification("AA0038").mass, 79.966331, 6)
+
+    def test_shared_names_keep_their_existing_resolver(self):
+        # RESID and PSI-MOD both call MOD:00046/AA0037 O-phospho-L-serine.
+        # Placing RESID after PSI-MOD means the existing answer stands.
+        self.assertEqual(
+            GenericModification("O-phospho-L-serine").resolve()["provider"], "psimod")
+
     def test_unknown_mass(self):
         # 2-pyrrolidone-5-carboxylic acid loses ammonia when formed from
         # glutamine and water when formed from glutamate, so RESID lists no

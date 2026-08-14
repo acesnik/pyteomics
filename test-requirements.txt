@@ -8,5 +8,5 @@ cython
 h5py
 hdf5plugin
 pynumpress
-psims > 0.1.42
+psims >= 1.4.0
 spectrum_utils
