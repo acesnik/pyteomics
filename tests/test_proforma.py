@@ -800,16 +800,6 @@ class PSIModModificationResolverTest(unittest.TestCase):
         self.assertRaises(ModificationMassNotFoundError, lambda: state.resolve())
 
 
-try:
-    from psims.controlled_vocabulary.controlled_vocabulary import load_resid as _load_resid
-    _has_resid = True
-except ImportError:
-    # psims predating RESID support. The tag still parses; only resolution
-    # is unavailable, so skip the tests that resolve.
-    _has_resid = False
-
-
-@unittest.skipIf(not _has_resid, "psims does not provide load_resid")
 class ResidModificationResolverTest(unittest.TestCase):
     def test_resolve_by_accession(self):
         mod = ResidModification("RESID:AA0038").resolve()

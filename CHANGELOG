@@ -6,8 +6,9 @@ dev
     by Anthony Cesnik). Both the ``RESID`` and ``R`` prefixes resolve, completing the
     ProForma 2.0 controlled-vocabulary list, and resolving unprefixed RESID names
     and accessions such as ``[AA0038]`` through the generic resolver chain.
-    Requires psims 1.4.0 or newer for ``load_resid`` (`psims#26 <https://github.com/mobiusklein/psims/pull/26>`_);
-    without it the tag still parses and the RESID tests skip.
+
+    .. note ::
+      ProForma parsing now requires psims 1.4.0 or newer.
 
 5.0.1
 -----
