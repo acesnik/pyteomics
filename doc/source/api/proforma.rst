@@ -83,7 +83,7 @@ coupled with minimal information about mass and position data.
 Dependencies
 ------------
 
-To resolve PSI-MOD, XL-MOD, and GNO identifiers, :mod:`psims` is required. By default,
+To resolve PSI-MOD, XL-MOD, GNO and RESID identifiers, :mod:`psims` is required. By default,
 :mod:`psims` retrieves the most recent version of each controlled vocabulary from the internet, but
 includes a fall-back version to use when the network is unavailable. It can also create
 an application cache on disk.
@@ -134,7 +134,7 @@ These features are independent from each other:
 
 3. Top Down Extensions
 
-    - [ ] Additional CV/ontologies for protein modifications: RESID (the prefix R MUST be used for RESID CV/ontology term names)
+    - [x] Additional CV/ontologies for protein modifications: RESID (the prefix R MUST be used for RESID CV/ontology term names)
     - [x] Chemical formulas (this feature occurs in two places in this list).
 
 4. Cross-Linking Extensions
@@ -198,6 +198,8 @@ Modification Tags
 
 .. autoclass:: PSIModModification
 
+.. autoclass:: ResidModification
+
 .. autoclass:: XLMODModification
 
 .. autoclass:: GNOmeModification
@@ -240,5 +242,7 @@ Modification Resolvers
 .. autoclass:: PSIModResolver
 
 .. autoclass:: XLMODResolver
+
+.. autoclass:: ResidResolver
 
 .. autoclass:: GNOResolver
