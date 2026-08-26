@@ -8,6 +8,14 @@ dev
     compliance checklist for cross-linking.
   - Fix :py:meth:`~.TagBase.is_modification` omitting ``TagTypeEnum.xlmod``, so
     a cross-linker was invisible to :py:meth:`~.ProForma.find_modification`.
+  - Support RESID in ProForma, adding :py:class:`~.ResidResolver` and
+    :py:class:`~.ResidModification` (`#214 <https://github.com/levitsky/pyteomics/pull/214>`_
+    by Anthony Cesnik). Both the ``RESID`` and ``R`` prefixes resolve, completing the
+    ProForma 2.0 controlled-vocabulary list, and resolving unprefixed RESID names
+    and accessions such as ``[AA0038]`` through the generic resolver chain.
+
+    .. note ::
+      ProForma parsing now requires psims 1.4.0 or newer.
 
 5.0.1
 -----

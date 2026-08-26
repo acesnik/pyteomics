@@ -25,7 +25,8 @@ from numbers import Integral
 from .mass import Composition, std_aa_mass, Unimod, nist_mass, calculate_mass, std_ion_comp, mass_charge_ratio, std_aa_comp
 from .auxiliary import PyteomicsError, BasicComposition
 from .auxiliary.utils import add_metaclass, memoize
-from .auxiliary.psims_util import load_psimod, load_xlmod, load_gno, obo_cache, _has_psims
+from .auxiliary.psims_util import (load_psimod, load_xlmod, load_gno, load_resid, obo_cache,
+                                   _has_psims)
 
 try:
     import numpy as np
@@ -247,6 +248,7 @@ class TagTypeEnum(Enum):
     comkp = 13
     limit = 14
     custom = 15
+    resid = 16
 
     group_placeholder = 999
 
@@ -372,6 +374,7 @@ class TagBase(object):
             # XL-MOD was omitted when cross-linking support was added, so
             # `find_modification` could not see a cross-linker.
             TagTypeEnum.xlmod,
+            TagTypeEnum.resid,
         )
 
     def find_modification(self) -> Optional["TagBase"]:
@@ -970,6 +973,58 @@ class GNOResolver(ModificationResolver):
         return rec
 
 
+class ResidResolver(ModificationResolver):
+    """Resolve RESID accessions and names.
+
+    RESID identifiers are not numeric (``AA0038``), so unlike the other
+    prefixed vocabularies they always arrive as a name rather than an id.
+    """
+
+    def __init__(self, **kwargs):
+        super(ResidResolver, self).__init__('resid', **kwargs)
+        self._database = kwargs.get("database")
+
+    def load_database(self):
+        return load_resid()
+
+    def parse_identifier(self, identifier: str):
+        """Strip the CV prefix, tolerating the space the spec writes after it.
+
+        The ProForma specification gives ``EM[R: L-methionine sulfone]...`` as
+        an example, so the remainder needs stripping before lookup.
+        """
+        name, id = super(ResidResolver, self).parse_identifier(identifier)
+        if name is not None:
+            name = name.strip()
+        return name, id
+
+    def _resolve_impl(self, name=None, id=None, **kwargs):
+        if name is not None:
+            defn = self.database[name]
+        elif id is not None:
+            defn = self.database['AA{:04d}'.format(id)]
+        else:
+            raise ValueError("Must provide one of `name` or `id`")
+        mass = defn.monoisotopic_mass
+        if mass is None:
+            # RESID lists no single mass change for this entry, either because
+            # it has none or because the change depends on which residue was
+            # modified. Rather than pick one, point at where the alternatives
+            # are: each carries the parent residue it applies to.
+            raise ModificationMassNotFoundError(
+                "RESID gives no single mass for %r; it lists %d corrections, each for a "
+                "different parent residue. See `.resolver.database[%r].corrections`." % (
+                    (name or id), len(defn.corrections), defn.id))
+        return {
+            'mass': mass,
+            'composition': defn.composition,
+            'name': defn.name,
+            'id': defn.id,
+            'provider': self.name,
+            "source": self
+        }
+
+
 class GenericResolver(ModificationResolver):
 
     def __init__(self, resolvers, **kwargs):
@@ -1520,6 +1575,15 @@ class XLMODModification(ModificationBase):
     _tag_type = TagTypeEnum.xlmod
 
 
+class ResidModification(ModificationBase):
+    __slots__ = ()
+
+    resolver = ResidResolver()
+    prefix_name = "RESID"
+    short_prefix = 'R'
+    _tag_type = TagTypeEnum.resid
+
+
 class CustomModification(ModificationBase):
     __slots__ = ()
 
@@ -1543,6 +1607,10 @@ class GenericModification(ModificationBase):
         PSIModModification.resolver,
         XLMODModification.resolver,
         GNOmeModification.resolver,
+        # After the vocabularies that share names with RESID, so anything they
+        # already answer keeps its existing answer, and before the non-strict
+        # pass so a RESID name is preferred over a fuzzy Unimod match.
+        ResidModification.resolver,
         # Some really common names aren't actually found in the XML exactly, so default
         # to non-strict matching now to avoid masking other sources here.
         partial(UnimodModification.resolver, strict=False)
