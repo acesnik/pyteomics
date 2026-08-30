@@ -2947,7 +2947,8 @@ class Parser:
                 elif self.state == TAG_BEFORE:
                     self.state = POST_TAG_BEFORE
                 elif self.state == TAG_AFTER:
-                    self.c_term = self.current_tag()
+                    tags = self.current_tag()
+                    self.c_term.extend(tags)
                     self.state = POST_TAG_AFTER
                 elif self.state == GLOBAL:
                     self.state = POST_GLOBAL
@@ -3035,6 +3036,17 @@ class Parser:
             self.unlocalized_modifications.extend(self.current_tag())
             self.state = BEFORE
         elif c == "-":
+            if self.n_term:
+                raise ProFormaError(
+                    (
+                        f"Error In State {self.state}, found a second N-terminal modification group "
+                        f"at index {self.index}; ProForma allows only one N-terminal group. "
+                        "Put multiple N-terminal modifications in that group, e.g. "
+                        "'[UNIMOD:5][UNIMOD:385]-PEPTIDE'"
+                    ),
+                    self.index,
+                    self.state,
+                )
             self.n_term = self.current_tag()
             self.state = BEFORE
         elif c == "^":
@@ -3125,6 +3137,15 @@ class Parser:
             self.charge_buffer = NumberParser()
         elif c == "+":
             self._handle_chimeric_separator()
+        elif c == "[":
+            self.state = TAG_AFTER
+            self.depth = 1
+        else:
+            raise ProFormaError(
+                f"Error In State {self.state}, unexpected {c} found at index {self.index}",
+                self.index,
+                self.state,
+            )
 
     def handle_charge_start(self, c: str):
         if c in "+-":
@@ -3184,6 +3205,12 @@ class Parser:
     def handle_adduct_end(self, c: str):
         if c == "+":
             self._handle_chimeric_separator()
+        else:
+            raise ProFormaError(
+                f"Error In State {self.state}, unexpected {c} found at index {self.index}",
+                self.index,
+                self.state,
+            )
 
     def handle_name_level(self, c: str):
         if c == '>' and self.name_level < 3:
@@ -3283,6 +3310,23 @@ class Parser:
         return self.index < self.length
 
     def _finish_component(self) -> ProFormaParseResult:
+        if not self.positions and self.current_aa is None:
+            if self.chimeric:
+                raise ProFormaError("Empty peptidoform in chimeric ProForma string", self.index, self.state)
+            raise ProFormaError(
+                "A ProForma peptidoform must contain at least one amino acid",
+                self.index,
+                self.state,
+            )
+
+        complete_states = (SEQ, POST_INTERVAL_TAG, POST_TAG_AFTER, CHARGE_NUMBER, ADDUCT_END)
+        if self.state not in complete_states:
+            raise ProFormaError(
+                f"Error In State {self.state}, incomplete ProForma string reached end of input",
+                self.index,
+                self.state,
+            )
+
         if self.charge_buffer:
             charge_number = self.charge_buffer()
             if self.adduct_buffer:
@@ -3297,9 +3341,6 @@ class Parser:
             charge_state = None
         if self.current_aa:
             self.pack_sequence_position()
-
-        if not self.positions and self.chimeric:
-            raise ProFormaError("Empty peptidoform in chimeric ProForma string", self.index, self.state)
 
         z, k = self._local_charges()
         if k:

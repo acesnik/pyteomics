@@ -4,6 +4,7 @@ from os import path
 import unittest
 import pickle
 import math
+from itertools import product
 import pyteomics
 pyteomics.__path__ = [path.abspath(
     path.join(path.dirname(__file__), path.pardir, 'pyteomics'))]
@@ -25,6 +26,47 @@ obo_cache.enabled = bool(os.environ.get("OBO_CACHE_ENABLED"))
 
 class ProFormaTest(unittest.TestCase):
     maxDiff = None
+
+    def test_spec_shaped_peptidoform_conformance_matrix(self):
+        """Exercise combinations assembled from the ProForma grammar.
+
+        This deterministic matrix covers optional prefix and suffix productions.
+        Each input has a ``sequence`` production, so the parser must accept it.
+        """
+        prefixes = (
+            "", "{+1}", "[+1]?", "[+1]^2?", "[+1]-", "[+1][+2]-",
+            "[+1][+2][+3]-", "<13C>", "<[+1]@C>",
+        )
+        sequences = ("PEPTIDE", "PEP[+1]TIDE", "(PEP)[+1]TIDE", "(?PEP)TIDE")
+        suffixes = ("", "-[+1]", "-[+1][+2]", "-[+1][+2][+3]", "/2", "/2[+H+]")
+        for prefix, sequence, suffix in product(prefixes, sequences, suffixes):
+            with self.subTest(peptidoform=prefix + sequence + suffix):
+                ProForma.parse(prefix + sequence + suffix)
+
+        # Positive examples added with HUPO-PSI/ProForma issue #33.
+        for peptidoform in (
+            "[Acetyl][Acetyl][Carbamyl]-QPEPTIDE",
+            "PEPTIDEG-[Methyl][Amidated][INFO:A lot of C terminal mods]",
+        ):
+            with self.subTest(peptidoform=peptidoform):
+                ProForma.parse(peptidoform)
+
+    def test_spec_shaped_invalid_peptidoform_conformance_matrix(self):
+        """Reject grammar-breaking mutations of otherwise valid productions."""
+        invalid_peptidoforms = (
+            "",                      # no required sequence
+            "[+1]",                  # a pre-sequence tag needs ?/^n? or -
+            "[+1]-",                 # N-terminus needs a sequence afterwards
+            "{+1}",                  # labile tag without a sequence
+            "<13C>",                 # isotope rule without a sequence
+            "[+1]-[+2]-PEPTIDE",     # repeated modNTerm group
+            "PEPTIDE-[+1]X",         # no content may follow modCTerm
+            "PEPTIDE/2[+H+]X",       # no content may follow an adduct list
+        )
+        for peptidoform in invalid_peptidoforms:
+            with self.subTest(peptidoform=peptidoform):
+                with self.assertRaises(ProFormaError):
+                    ProForma.parse(peptidoform)
 
     def test_complicated_short(self):
         complicated_short = r"<[Carbamidomethyl]@C><13C>[Hydroxylation]?{HexNAc}[Hex]-ST[UNIMOD:Oxidation](EPP)[+18.15]ING"
