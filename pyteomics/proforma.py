@@ -2720,6 +2720,8 @@ PEPTIDOFORM_NAME_CLOSE = ParserStateEnum.peptidoform_name_close
 
 DONE = ParserStateEnum.done
 
+INTER_CHAIN_CROSS_LINK_START = ParserStateEnum.inter_chain_cross_link_start
+
 VALID_AA_UPPER = set("QWERTYIPASDFGHKLCVNMXUOJZB")
 VALID_AA = {s.lower() for s in VALID_AA_UPPER} | VALID_AA_UPPER
 TERMINAL_SPEC_CHARS = set('N-term') | set('C-term') | set("ncT: ")
@@ -3493,7 +3495,7 @@ class Parser:
                 self.state,
             )
 
-        complete_states = (SEQ, POST_INTERVAL_TAG, POST_TAG_AFTER, CHARGE_NUMBER, ADDUCT_END)
+        complete_states = (SEQ, POST_INTERVAL_TAG, POST_TAG_AFTER, CHARGE_NUMBER, ADDUCT_END, INTER_CHAIN_CROSS_LINK_START)
         if self.state not in complete_states:
             raise ProFormaError(
                 f"Error In State {self.state}, incomplete ProForma string reached end of input",
